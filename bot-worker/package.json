@@ -1,9 +1,9 @@
 {
-  "name": "roblox-manager-music-worker",
+  "name": "roblox-manager-bot-worker",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Always-on Discord gateway and Lavalink worker for the Roblox manager bot's /play command.",
+  "description": "Always-on Discord gateway worker that applies /presence status and custom status text for the Roblox manager bot.",
   "scripts": {
     "start": "bun run src/index.ts",
     "start:node": "node --experimental-strip-types src/index.ts",

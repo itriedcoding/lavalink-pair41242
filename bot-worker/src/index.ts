@@ -2,10 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { BotPool } from "./bots.ts";
 import { loadConfig } from "./config.ts";
-import { BadRequestError, MusicError, messageOf } from "./errors.ts";
+import type { PresenceStatus } from "./discord.ts";
+import { BadRequestError, WorkerError, messageOf } from "./errors.ts";
 
-const CONTROLS = ["play", "pause", "stop", "volup", "voldown"] as const;
-type Control = (typeof CONTROLS)[number];
+const STATUSES: PresenceStatus[] = ["online", "idle", "dnd", "invisible"];
+const MAX_STATUS_TEXT = 128;
 
 const config = loadConfig(process.env);
 
@@ -65,7 +66,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
-  if (!["/play", "/control", "/state"].includes(path)) {
+  if (path !== "/presence") {
     send(response, 404, { error: "Not found" });
     return;
   }
@@ -89,46 +90,31 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   try {
-    if (path === "/play") {
-      const guildId = stringField(body, "guildId");
-      const userId = stringField(body, "userId");
-      const textChannelId = stringField(body, "textChannelId");
-      const query = stringField(body, "query").slice(0, 300);
-
-      const connection = await pool.ensureGuild(guildId);
-      const outcome = await connection.play(guildId, userId, textChannelId, query);
-      send(response, 200, outcome);
-      return;
-    }
-
-    if (path === "/control") {
-      const guildId = stringField(body, "guildId");
-      const userId = stringField(body, "userId");
-      const action = stringField(body, "action");
-      if (!CONTROLS.includes(action as Control)) {
-        send(response, 400, { error: `Unknown control \`${action}\`.` });
-        return;
-      }
-
-      const connection = await pool.ensureGuild(guildId);
-      await connection.control(guildId, userId, action as Control);
-      send(response, 200, { ok: true, state: connection.state(guildId) });
-      return;
-    }
-
     const guildId = stringField(body, "guildId");
-    send(response, 200, { state: pool.find(guildId)?.state(guildId) ?? null });
+    const status = stringField(body, "status") as PresenceStatus;
+    if (!STATUSES.includes(status)) {
+      throw new BadRequestError(`Unknown status \`${status}\`.`);
+    }
+
+    const rawText = typeof body.text === "string" ? body.text.trim() : "";
+    if (rawText.length > MAX_STATUS_TEXT) {
+      throw new BadRequestError(
+        `Custom status text must be ${MAX_STATUS_TEXT} characters or fewer.`,
+      );
+    }
+    const text = rawText.length > 0 ? rawText : null;
+
+    const connection = await pool.ensureGuild(guildId);
+    await connection.setPresence(status, text);
+    send(response, 200, { ok: true, status, text });
   } catch (error) {
     const text = messageOf(error);
     const status =
-      error instanceof BadRequestError ? 400 : error instanceof MusicError ? 409 : 502;
+      error instanceof BadRequestError ? 400 : error instanceof WorkerError ? 409 : 502;
     if (status === 502) log("request failed:", text);
-    // Lavalink/Discord errors are actionable; anything else is internal detail.
-    const reply =
-      status === 502 && !/^(Lavalink|Discord)/.test(text)
-        ? "The music worker hit an internal error. Check its logs."
-        : text;
-    send(response, status, { error: reply });
+    send(response, status, {
+      error: status === 502 ? "The presence worker hit an internal error. Check its logs." : text,
+    });
   }
 }
 
@@ -141,12 +127,12 @@ const server = createServer((request, response) => {
 });
 
 server.listen(config.port, () => {
-  log(`music worker listening on :${config.port}`);
+  log(`presence worker listening on :${config.port}`);
 });
 
 await pool.start().catch((error) => {
   log("could not load bot credentials:", messageOf(error));
-  log("the worker stays up; /play will retry once Convex is reachable");
+  log("the worker stays up; /presence will retry once Convex is reachable");
 });
 
 function shutdown(signal: string): void {

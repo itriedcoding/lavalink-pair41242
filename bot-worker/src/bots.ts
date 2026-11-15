@@ -1,15 +1,71 @@
 /**
- * Keeps one Discord gateway connection per tenant bot. Bot credentials come
- * from the Convex deployment through the secret-gated `/music/bots` route, so a
- * workspace only has to save its bot token in the dashboard.
+ * One Discord gateway connection per tenant bot. Credentials and the last
+ * presence come from the Convex deployment through the secret-gated
+ * `/worker/bots` route, so a workspace only saves its bot token in the
+ * dashboard.
  */
 
 import type { WorkerConfig } from "./config.ts";
 import { fetchBots, type BotCredentials } from "./convexApi.ts";
-import { MusicError, messageOf } from "./errors.ts";
-import { BotConnection } from "./player.ts";
+import { DiscordGateway, type PresenceStatus } from "./discord.ts";
+import { WorkerError, messageOf } from "./errors.ts";
 
 const REFRESH_MS = 5 * 60_000;
+
+export class BotConnection {
+  private readonly gateway: DiscordGateway;
+  private presence: { status: PresenceStatus; text: string | null };
+  private starting: Promise<void> | null = null;
+
+  constructor(
+    readonly botId: string,
+    readonly token: string,
+    presence: { status: PresenceStatus; text: string | null },
+    private readonly log: (...args: unknown[]) => void,
+  ) {
+    this.presence = presence;
+    this.gateway = new DiscordGateway(token, {
+      onReady: () => this.applyPresence(),
+      onFatal: (reason) => this.log(`bot ${botId}: ${reason}`),
+    });
+  }
+
+  start(): Promise<void> {
+    if (!this.starting) {
+      this.starting = this.gateway
+        .connect()
+        .then((user) => {
+          this.applyPresence();
+          this.log(`gateway ready for bot ${this.botId} (${user.username})`);
+        })
+        .catch((error) => {
+          this.starting = null;
+          throw error;
+        });
+    }
+    return this.starting;
+  }
+
+  async setPresence(status: PresenceStatus, text: string | null): Promise<void> {
+    this.presence = { status, text };
+
+    // A freshly started worker may still be identifying; wait for READY so the
+    // update is not dropped on a socket that is not open yet.
+    if (!this.gateway.connected) {
+      await this.start();
+    }
+    this.applyPresence();
+  }
+
+  destroy(): void {
+    this.gateway.destroy();
+  }
+
+  private applyPresence(): void {
+    if (!this.gateway.connected) return;
+    this.gateway.setPresence(this.presence.status, this.presence.text);
+  }
+}
 
 export class BotPool {
   private readonly byBotId = new Map<string, BotConnection>();
@@ -46,8 +102,8 @@ export class BotPool {
     await this.refresh();
     const found = this.byGuild.get(guildId);
     if (!found) {
-      throw new MusicError(
-        "This server's bot is not connected to the music worker. Save the bot token in the dashboard first.",
+      throw new WorkerError(
+        "This server's bot is not connected to the presence worker. Save the bot token in the dashboard first.",
       );
     }
     return found;
@@ -94,9 +150,10 @@ export class BotPool {
     const connection = new BotConnection(
       bot.botId,
       bot.botToken,
-      this.config.nodeName,
-      this.config.lavalinkUrl,
-      this.config.lavalinkPassword,
+      {
+        status: bot.presenceStatus,
+        text: bot.presenceText,
+      },
       this.log,
     );
 

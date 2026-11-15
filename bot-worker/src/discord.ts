@@ -1,13 +1,12 @@
 /**
  * Minimal Discord gateway client.
  *
- * The main bot answers HTTP interactions only, so voice events never reach
- * Convex. This worker keeps one gateway socket per tenant bot, which is what
- * Lavalink needs in order to open the UDP voice connection: the bot must send
- * op 4 and forward VOICE_STATE_UPDATE + VOICE_SERVER_UPDATE to Lavalink.
+ * The Convex bot answers HTTP interactions only, so it cannot set a presence:
+ * Discord has no REST endpoint for a bot's status or custom activity. Presence
+ * is a gateway op (op 3), which this worker sends over one socket per bot.
  *
- * Only GUILDS and GUILD_VOICE_STATES are requested, neither of which is a
- * privileged intent. No message content is read.
+ * Only GUILDS is requested, which is not a privileged intent and no message
+ * content is read.
  */
 
 import WebSocket from "ws";
@@ -18,26 +17,13 @@ export type GatewayUser = {
   global_name?: string | null;
 };
 
-export type VoiceStateEvent = {
-  guildId: string;
-  userId: string;
-  sessionId: string;
-  channelId: string | null;
-};
-
-export type VoiceServerEvent = {
-  guildId: string;
-  token: string;
-  endpoint: string;
-};
+export type PresenceStatus = "online" | "idle" | "dnd" | "invisible";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-const INTENTS = 1 | 128; // GUILDS | GUILD_VOICE_STATES
+const INTENTS = 1; // GUILDS
 
 type GatewayHandlers = {
   onReady?: (user: GatewayUser) => void;
-  onVoiceState?: (event: VoiceStateEvent) => void;
-  onVoiceServer?: (event: VoiceServerEvent) => void;
   onFatal?: (reason: string) => void;
 };
 
@@ -65,7 +51,6 @@ export class DiscordGateway {
     });
   }
 
-  /** Resolves once Discord sends READY for this bot. */
   connect(): Promise<GatewayUser> {
     this.open(this.gatewayUrl());
     return this.ready;
@@ -75,15 +60,12 @@ export class DiscordGateway {
     return this.socket?.readyState === WebSocket.OPEN && this.user !== null;
   }
 
-  joinVoice(guildId: string, channelId: string | null): void {
+  /** op 3: status plus an optional custom status line. */
+  setPresence(status: PresenceStatus, text: string | null): void {
+    const activities = text ? [{ name: "Custom Status", type: 4, state: text }] : [];
     this.send({
-      op: 4,
-      d: {
-        guild_id: guildId,
-        channel_id: channelId,
-        self_mute: false,
-        self_deaf: true,
-      },
+      op: 3,
+      d: { since: null, activities, status, afk: false },
     });
   }
 
@@ -152,8 +134,8 @@ export class DiscordGateway {
               intents: INTENTS,
               properties: {
                 os: process.platform,
-                browser: "roblox-manager-music",
-                device: "roblox-manager-music",
+                browser: "roblox-manager-presence",
+                device: "roblox-manager-presence",
               },
             },
           });
@@ -170,7 +152,6 @@ export class DiscordGateway {
         this.reconnectNow();
         return;
       case 9:
-        // Invalid session: drop the sequence and identify again from scratch.
         this.sessionId = null;
         this.sequence = null;
         setTimeout(() => this.reconnectNow(), 1000 + Math.random() * 4000);
@@ -201,36 +182,6 @@ export class DiscordGateway {
 
     if (type === "RESUMED") {
       this.reconnectAttempts = 0;
-      return;
-    }
-
-    if (type === "VOICE_STATE_UPDATE") {
-      const event = data as {
-        guild_id: string;
-        user_id: string;
-        session_id: string;
-        channel_id: string | null;
-      };
-      this.handlers.onVoiceState?.({
-        guildId: event.guild_id,
-        userId: event.user_id,
-        sessionId: event.session_id,
-        channelId: event.channel_id ?? null,
-      });
-      return;
-    }
-
-    if (type === "VOICE_SERVER_UPDATE") {
-      const event = data as {
-        guild_id: string;
-        token: string;
-        endpoint: string;
-      };
-      this.handlers.onVoiceServer?.({
-        guildId: event.guild_id,
-        token: event.token,
-        endpoint: event.endpoint,
-      });
     }
   }
 
@@ -238,7 +189,6 @@ export class DiscordGateway {
     this.stopHeartbeat();
     this.acked = true;
     this.heartbeatTimer = setInterval(() => {
-      // No ACK since the previous beat: Discord considers the socket a zombie.
       if (!this.acked) {
         this.reconnectNow();
         return;
@@ -288,43 +238,3 @@ type GatewayPayload = {
   s?: number | null;
   t?: string | null;
 };
-
-/* ------------------------------------------------------------------ *
- * REST
- * ------------------------------------------------------------------ */
-
-export class DiscordRestError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-export async function discordRest<T>(
-  token: string,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
-  const response = await fetch(`https://discord.com/api/v10${path}`, {
-    method,
-    headers: {
-      authorization: `Bot ${token}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new DiscordRestError(
-      response.status,
-      `Discord ${method} ${path} failed (${response.status}): ${text.slice(0, 300)}`,
-    );
-  }
-
-  if (response.status === 204) return null as T;
-  return (await response.json()) as T;
-}
