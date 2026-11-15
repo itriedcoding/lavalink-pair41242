@@ -1,0 +1,26 @@
+# Render blueprint for the music worker.
+#
+# The worker keeps a Discord gateway socket open per bot, so it must stay up:
+# Render's free plan spins services down after 15 minutes and would drop voice,
+# which is why this uses the Starter plan.
+services:
+  - type: web
+    name: roblox-manager-music-7f3a91
+    runtime: docker
+    rootDir: music-worker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: CONVEX_SITE_URL
+        value: https://quiet-cod-741.convex.site
+      # Prompted once in Render; paste the value from the Convex dashboard.
+      - key: MUSIC_SHARED_SECRET
+        sync: false
+      - key: LAVALINK_URL
+        value: https://lavalink-v4.triniumhost.com:443
+      - key: LAVALINK_PASSWORD
+        value: free
+      - key: LAVALINK_NAME
+        value: triniumhost

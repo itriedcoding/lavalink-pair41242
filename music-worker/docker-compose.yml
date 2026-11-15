@@ -1,0 +1,13 @@
+# Lavalink only. The worker itself runs on Bun/Node (see README), because it
+# needs the repo's source and its own .env.
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4
+    container_name: music-lavalink
+    restart: unless-stopped
+    environment:
+      - LAVALINK_PASSWORD=${LAVALINK_PASSWORD:?Set LAVALINK_PASSWORD in music-worker/.env}
+    volumes:
+      - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
+    ports:
+      - "2333:2333"

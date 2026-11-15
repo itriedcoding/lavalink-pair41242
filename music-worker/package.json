@@ -1,0 +1,20 @@
+{
+  "name": "roblox-manager-music-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Always-on Discord gateway and Lavalink worker for the Roblox manager bot's /play command.",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "start:node": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.7.0"
+  }
+}
