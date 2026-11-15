@@ -5,7 +5,7 @@
 # presence, which is why this uses the Starter plan when a card is available.
 services:
   - type: web
-    name: roblox-manager-music-7f3a91
+    name: roblox-manager-bot-worker-7f3a91
     runtime: docker
     rootDir: bot-worker
     dockerfilePath: ./Dockerfile
